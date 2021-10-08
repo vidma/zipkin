@@ -148,8 +148,34 @@ public class ZipkinQueryApiV2 {
     return jsonResponse(writeTraces(SpanBytesEncoder.JSON_V2, traces));
   }
 
+  @Get("/api/v2/ingest-traces")
+  @Blocking
+  public AggregatedHttpResponse ingestTraces(
+    @Param("serviceName") Optional<String> serviceName,
+    @Param("spanName") Optional<String> spanName,
+    @Param("endTs") Optional<Long> endTs,
+    @Param("lookback") Optional<Long> lookback,
+    @Default("10") @Param("limit") int limit)
+    throws IOException {
+    // FIXME: find a better way to filter all interesting root spans like jaxrs request
+    // e.g. filter kind=Server
+    //  (e.g. acquireConnection are possibly not interesting)
+    QueryRequest queryRequest =
+      QueryRequest.newBuilder()
+        .serviceName(serviceName.orElse(null))
+        .spanName(spanName.orElse(null))
+        .endTs(endTs.orElse(System.currentTimeMillis()))
+        .lookback(lookback.orElse(defaultLookback))
+        .limit(limit)
+        .build();
+
+    List<List<Span>> traces = storage.spanStore().getTraces(queryRequest).execute();
+    return jsonResponse(writeTraces(SpanBytesEncoder.JSON_V2, traces));
+  }
+
   @Get("/api/v2/trace/{traceId}")
   @Blocking
+  // FIXME: this gives all for a single trace!!!
   public AggregatedHttpResponse getTrace(@Param("traceId") String traceId) throws IOException {
     traceId = traceId != null ? traceId.trim() : null;
     traceId = Span.normalizeTraceId(traceId);
