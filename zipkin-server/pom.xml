@@ -39,11 +39,7 @@
   <dependencyManagement>
     <dependencies>
       <!-- FIXME: conflicts? -->
-      <dependency>
-        <groupId>io.kensu.dim.client</groupId>
-        <artifactId>java-resteasy-jackson</artifactId>
-        <version>1.0.0-SNAPSHOT</version>
-      </dependency>
+
 <!--      <dependency>-->
 <!--        <groupId>com.github.wnameless.json</groupId>-->
 <!--        <artifactId>json-flattener</artifactId>-->
@@ -389,6 +385,67 @@
       <version>2.4.0</version>
       <scope>test</scope>
     </dependency>
+    <dependency>
+      <groupId>com.google.code.gson</groupId>
+      <artifactId>gson</artifactId>
+      <version>2.8.6</version>
+      <scope>compile</scope>
+    </dependency>
+
+    <!-- fixme: temp -->
+<!--    <dependency>-->
+<!--      <groupId>org.glassfish.jersey.core</groupId>-->
+<!--      <artifactId>jersey-common</artifactId>-->
+<!--&lt;!&ndash;      <version>2.22.2</version>&ndash;&gt;-->
+<!--      <version>3.0.3</version>-->
+<!--    </dependency>-->
+
+<!--    <dependency>-->
+<!--      <groupId>org.jboss.resteasy</groupId>-->
+<!--      <artifactId>resteasy-jaxrs</artifactId>-->
+<!--      <version>3.12.1.Final</version>-->
+<!--      <scope>provided</scope>-->
+<!--    </dependency>-->
+
+
+
+<!--    <dependency>-->
+<!--      <groupId>io.kensu.dim.client</groupId>-->
+<!--      <artifactId>java-resteasy-jackson</artifactId>-->
+<!--      <version>1.0.0-jackson2-12-SNAPSHOT</version>-->
+<!--      <scope>provided</scope> &lt;!&ndash; shaded jar &ndash;&gt;-->
+<!--    </dependency>-->
+
+        <dependency>
+          <groupId>io.kensu.dam</groupId>
+          <artifactId>kensu-dam-java-client-jackson-2-12-0</artifactId>
+          <version>1.1.1-SNAPSHOT</version>
+          <scope>provided</scope> <!-- shaded jar -->
+        </dependency>
+
+<!--        <dependency>-->
+<!--          <groupId>io.kensu.dim.client</groupId>-->
+<!--          <artifactId>java-resteasy-jackson</artifactId>-->
+<!--          <version>1.0.0-SNAPSHOT</version>-->
+<!--        </dependency>-->
+
+    <dependency>
+      <groupId>com.github.jsqlparser</groupId>
+      <artifactId>jsqlparser</artifactId>
+      <version>3.1</version>
+    </dependency>
+
+
+    <!-- fixme? -->
+    <!-- https://mvnrepository.com/artifact/org.hibernate.validator/hibernate-validator -->
+    <!-- doesn't help, means there's a jarhell somewhere here... -->
+<!--    <dependency>-->
+<!--      <groupId>org.hibernate.validator</groupId>-->
+<!--      <artifactId>hibernate-validator</artifactId>-->
+<!--      <version>7.0.1.Final</version>-->
+<!--    </dependency>-->
+
+
   </dependencies>
 
   <profiles>
@@ -421,6 +478,9 @@
         <dependency>
           <groupId>${project.groupId}</groupId>
           <artifactId>zipkin-lens</artifactId>
+          <!-- fixme: mvn install might be better - https://stackoverflow.com/a/4955695 -->
+          <scope>system</scope>
+          <systemPath>/Users/vidma/kensu-new/zipkin/vidma-zipkin-lens.jar</systemPath>
           <version>${project.version}</version>
         </dependency>
       </dependencies>

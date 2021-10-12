@@ -1,21 +1,23 @@
 package kensu.ingestion;
 
-import com.google.common.cache.Cache;
-import com.google.common.cache.CacheBuilder;
+//import com.google.common.cache.Cache;
+//import com.google.common.cache.CacheBuilder;
+import com.google.gson.Gson;
+import com.google.gson.reflect.TypeToken;
 import io.kensu.collector.config.DamProcessEnvironment;
 import io.kensu.collector.model.DamBatchBuilder;
 import io.kensu.collector.model.DamDataCatalogEntry;
 import io.kensu.collector.model.DamSchemaUtils;
 import io.kensu.collector.model.datasource.HttpDatasourceNameFormatter;
 import io.kensu.collector.model.datasource.JdbcDatasourceNameFormatter;
-import io.kensu.dim.client.util.DataSources;
-import io.kensu.dim.client.util.Lineages;
-import io.kensu.dim.client.invoker.ApiClient;
-import io.kensu.dim.client.invoker.ApiException;
-import io.kensu.dim.client.api.ManageKensuDamEntitiesApi;
-import io.kensu.dim.client.invoker.OfflineFileApiClient;
-import io.kensu.dim.client.model.*;
-import io.kensu.dim.client.model.Process;
+import io.kensu.dam.util.DataSources;
+import io.kensu.dam.util.Lineages;
+import io.kensu.dam.ApiClient;
+import io.kensu.dam.ApiException;
+import io.kensu.dam.ManageKensuDamEntitiesApi;
+import io.kensu.dam.OfflineFileApiClient;
+import io.kensu.dam.model.*;
+import io.kensu.dam.model.Process;
 import io.kensu.collector.utils.jdbc.parser.DamJdbcQueryParser;
 import io.kensu.collector.utils.jdbc.parser.ReferencedSchemaFieldsInfo;
 //import io.opentracing.contrib.reporter.Reporter;
@@ -23,10 +25,14 @@ import io.kensu.collector.utils.jdbc.parser.ReferencedSchemaFieldsInfo;
 //import io.opentracing.tag.Tag;
 //import io.opentracing.tag.Tags;
 import net.sf.jsqlparser.JSQLParserException;
+import org.springframework.boot.json.GsonJsonParser;
 import zipkin2.Span;
 //import zipkin2.Span;
 //import zipkin2.reporter.AsyncReporter;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Type;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.*;
 import java.util.Map.Entry;
@@ -75,12 +81,50 @@ public class JaegerIngester {
   protected DamProcessEnvironment damEnv = new DamProcessEnvironment();
 
 
-  protected <T> T getTagOrDefault(String tagKey, Span span, T defaultValue) {
-    // FIXME: string only!
-    return (T)(span.tags().getOrDefault(tagKey, defaultValue));
+  protected String getTagOrDefault(String tagKey, Span span, String defaultValue) {
+    return span.tags().getOrDefault(tagKey, defaultValue);
   }
 
-  protected String getParentId(Span span){
+  protected Integer getIntegerTagOrDefault(String tagKey, Span span, Integer defaultValue) {
+    String res = span.tags().get(tagKey);
+    if (res != null){
+      return Integer.parseInt(res);
+    } else {
+      return defaultValue;
+    }
+  }
+
+  protected Double getDoubleTagOrDefault(String tagKey, Span span, Double defaultValue) {
+    String res = span.tags().get(tagKey);
+    if (res != null){
+      return Double.parseDouble(res);
+    } else {
+      return defaultValue;
+    }
+  }
+
+  protected <T> T getTagsOfComplexType(String tagKey, Span span, Type cls, T defaultValue) {
+    String tagsString = span.tags().getOrDefault(tagKey, null);
+    if (tagsString != null) {
+      Gson gson = new Gson();
+      return (T)gson.fromJson(tagsString, cls);
+    } else {
+      return defaultValue;
+    }
+  }
+
+  protected Set<String> getTagsOfSetString(Span span, String tagKey) {
+    Type t = new TypeToken<Set<String>>() {}.getType();
+    return getTagsOfComplexType(tagKey, span, t, new HashSet<String>());
+  }
+
+
+  protected Set<FieldDef> getTagsOfSetFieldDef(Span span, String tagKey) {
+    Type t = new TypeToken<Set<FieldDef>>() {}.getType();
+    return getTagsOfComplexType(tagKey, span, t, new HashSet<FieldDef>());
+  }
+
+    protected String getParentId(Span span){
     String maybeParentId = span.parentId();
     if ((maybeParentId != null) && !maybeParentId.equals(span.id())){
       return maybeParentId;
@@ -103,13 +147,13 @@ public class JaegerIngester {
         // //  http.request.url.path.parameters	    visitId
         // //  http.request.url.query.parameters	outputFormat
         // //   - DamOutputSchema: [class FieldDef {
-        Integer httpStatus = getTagOrDefault(Tags.HTTP_STATUS, span, 0);
+        Integer httpStatus = getIntegerTagOrDefault(Tags.HTTP_STATUS, span, 0);
         String httpUrl = getTagOrDefault(Tags.HTTP_URL, span, null);
         String httpMethod = getTagOrDefault(Tags.HTTP_METHOD, span, null);
         String httpPathPattern = getTagOrDefault("http.request.url.path.pattern", span, null);
         // FIXME?: how!?
-        Set<String> httpPathParameters = (Set<String>)span.tags.get("http.request.url.path.parameters");
-        Set<String> httpQueryParameters = (Set<String>)span.tags.get("http.request.url.query.parameters");
+        Set<String> httpPathParameters = getTagsOfSetString(span, "http.request.url.path.parameters");
+        Set<String> httpQueryParameters = getTagsOfSetString(span, "http.request.url.query.parameters");
 
         if (httpMethod == null) {
           // this is probably not a span that we should consider for lineage purpose
@@ -190,8 +234,10 @@ public class JaegerIngester {
                 continue;
               }
 
-              Set<Span> queryChildren = spanChildrenCache.getIfPresent(spanChild.spanId);
-              if (queryChildren == null) queryChildren = new HashSet<>();
+              // FIXME!!!
+              Set<Span> queryChildren = children.stream()
+                .filter(x -> { return x.parentId().equals(spanChild.id()); })
+                .collect(Collectors.toSet());
               for (Span queryStatsSpan : queryChildren) {
                 toBeRemoved.add(queryStatsSpan);
                 if (queryStatsSpan.name().equals("QueryResultStats")) {
@@ -211,9 +257,12 @@ public class JaegerIngester {
                   Function<Integer, String> mkStats = (i) -> { return "db.column."+i+".stats";};
                   int keyIndex = 1;
                   String mdKey = mkKey.apply(keyIndex);
-                  Optional<Number> dbCount = Optional.ofNullable((Number) queryStatsSpan.tags().get("db.count"));
+                  Optional<Number> dbCount = Optional.ofNullable(getDoubleTagOrDefault("db.count", queryStatsSpan, null));
                   while (queryStatsSpan.tags().containsKey(mdKey)) {
-                    Map<String, String> md = (Map<String, String>)queryStatsSpan.tags().get(mdKey);
+                    Map<String, String> md = getTagsOfComplexType(mdKey, queryStatsSpan,
+                      new TypeToken<HashMap<String, String>>() {}.getType(),
+                      new HashMap<>());
+                    //Map<String, String> md = (Map<String, String>)queryStatsSpan.tags().get(mdKey);
                     String db = md.get("schemaName");
                     db = db.length()==0?dbInstance:db;
                     String table = md.get("tableName");
@@ -236,7 +285,9 @@ public class JaegerIngester {
                       }
                     }
                     final String columnFinal = column;
-                    Map<String, Double> statsTagValue = ((Map<String, Double>)queryStatsSpan.tags.get(mkStats.apply(keyIndex)));
+                    Map<String, Double> statsTagValue = getTagsOfComplexType(mkStats.apply(keyIndex), queryStatsSpan,
+                      new TypeToken<HashMap<String, Double>>() {}.getType(),
+                      new HashMap<>());
                     statsTagValue.forEach((k,v) -> stats.put(columnFinal+"."+k, v));
                     mdKey = mkKey.apply(++keyIndex);
                   }
@@ -253,8 +304,10 @@ public class JaegerIngester {
                             */
 
               // FIXME!
-              Set<FieldDef> fieldsSet = (Set<FieldDef>) spanChild.tags().get("response.schema");
-              responseStats = (Map<String, Map<String, Double>>) spanChild.tags.get("response.stats");
+              Set<FieldDef> fieldsSet = getTagsOfSetFieldDef(spanChild, "response.schema");
+              responseStats = getTagsOfComplexType("response.stats", spanChild,
+                 new TypeToken<HashMap<String, Map<String, Double>>>() {}.getType(),
+                 new HashMap<String, Map<String, Double>>());
               endpointQueryCatalogEntryWithResultSchema = batchBuilder.addCatalogEntry("HTTP Request",
                 fieldsSet, httpPathPattern, "http", defaultLocationRef, HttpDatasourceNameFormatter.INST);
             }
@@ -267,9 +320,9 @@ public class JaegerIngester {
               //   we will keep only the last one thus, which can be a big issue... WHAT shall we do?
               //     => create several lineages per Query for example may do some goods ??!!
               statsMap.forEach((schemaAndTable, values) -> {
-                Map<String, Object> stats = new HashMap<>();
+                Map<String, BigDecimal> stats = new HashMap<>();
                 // bloody java compile for which Map<String, Object> and Map<String, Double> are incompatible
-                values.forEach(stats::put);
+                values.forEach((k, v) -> { stats.put(k, new BigDecimal(v)); });
                 DamDataCatalogEntry entry = queriedTableCatalogEntries.get(schemaAndTable);
                 if (entry != null) {
                   DataStatsPK statsPK = new DataStatsPK()
@@ -296,10 +349,13 @@ public class JaegerIngester {
             List<DamDataCatalogEntry> nonEmptyOutputs = queriedTableCatalogEntries.values().stream().filter(q -> !q.fields.isEmpty()).collect(Collectors.toList());
             if (!nonEmptyOutputs.isEmpty()) {
               // no lineages for schema without fields, if no more schema in or out after, then... not lineage
+              ArrayList<DamDataCatalogEntry> inputs = new ArrayList<>();
+              inputs.add(endpointQueryCatalogEntry);
+
               lineageDefIn = new Lineages.LineageDef(
                 process,
                 "query",
-                List.of(endpointQueryCatalogEntry),
+                inputs,
                 new ArrayList<>(queriedTableCatalogEntries.values()),
                 Lineages.DIRECT, // FIXME !!!! this is not sufficient at all
                 "APPEND",
@@ -321,11 +377,14 @@ public class JaegerIngester {
             List<DamDataCatalogEntry> nonEmptyInputs = queriedTableCatalogEntries.values().stream().filter(q -> !q.fields.isEmpty()).collect(Collectors.toList());
             if (!nonEmptyInputs.isEmpty()) {
               // no lineages for schema without fields, if no more schema in or out after, then... not lineage
+              ArrayList<DamDataCatalogEntry> outputs = new ArrayList<>();
+              outputs.add(endpointQueryCatalogEntryWithResultSchema);
+
               lineageDefOut = new Lineages.LineageDef(
                 process,
                 "query",
                 new ArrayList<>(queriedTableCatalogEntries.values()),
-                List.of(endpointQueryCatalogEntryWithResultSchema),
+                outputs,
                 OUT_ENDS_WITH_IN, // FIXME !!!! this is not sufficient at all -> at least we use "finish by"
                 "APPEND",
                 Lineages.NOW
@@ -340,8 +399,8 @@ public class JaegerIngester {
               DataStatsPK responseDataStatsPK = new DataStatsPK()
                 .schemaRef(new SchemaRef().byPK(endpointQueryCatalogEntryWithResultSchema.damSchema.getPk()))
                 .lineageRunRef(new LineageRunRef().byPK(lineageRunOut.getEntity().getPk()));
-              final Map<String, Object> responseDataStatsMap = new HashMap<>();
-              responseStats.forEach((k, map) -> map.forEach((subK, d) -> responseDataStatsMap.put(k+"."+subK, d)));
+              final Map<String, BigDecimal> responseDataStatsMap = new HashMap<>();
+              responseStats.forEach((k, map) -> map.forEach((subK, d) -> responseDataStatsMap.put(k+"."+subK, new BigDecimal(d))));
               DataStats responseDataStats = new DataStats().pk(responseDataStatsPK).stats(responseDataStatsMap);
               batchBuilder.getBatch()
                 .addDataStatsItem(new BatchDataStats().timestamp(Lineages.NOW.apply())
@@ -414,20 +473,20 @@ public class JaegerIngester {
   public final static Lineages.ProcessCatatalogEntry OUT_ENDS_WITH_IN = new Lineages.ProcessCatatalogEntry(java.util.Collections.singletonList(new Lineages.NoCheckProcessCatalogMapping() {
     public Map<Entry<DataSources.DataCatalogEntry, String>, Set<Entry<DataSources.DataCatalogEntry, String>>> apply(DataSources.DataCatalogEntry i, DataSources.DataCatalogEntry o) {
       Map<Entry<DataSources.DataCatalogEntry, String>, Set<Entry<DataSources.DataCatalogEntry, String>>> results =
-        new java.util.HashMap<Entry<DataSources.DataCatalogEntry, String>, Set<Entry<DataSources.DataCatalogEntry, String>>>();
+        new java.util.HashMap<>();
 
       for (FieldDef	ofd : o.fields) {
-        Entry<DataSources.DataCatalogEntry, String> op = new AbstractMap.SimpleEntry<DataSources.DataCatalogEntry, String>(o, ofd.getName());
+        Entry<DataSources.DataCatalogEntry, String> op = new AbstractMap.SimpleEntry<>(o, ofd.getName());
         Entry<DataSources.DataCatalogEntry, String> ip = null;
         for (FieldDef ifd: i.fields) {
           // if (ifd.getName().equals(ofd.getName())) {
           if (ofd.getName().equals(ifd.getName()) || ofd.getName().endsWith("."+ifd.getName())) {
-            ip = Map.<DataSources.DataCatalogEntry, String>entry(i, ifd.getName());
+            ip = new AbstractMap.SimpleImmutableEntry<>(i, ifd.getName());
             break;
           }
         }
         if (ip != null) {
-          Set<Entry<DataSources.DataCatalogEntry, String>> ips = new java.util.HashSet<Entry<DataSources.DataCatalogEntry, String>>();
+          Set<Entry<DataSources.DataCatalogEntry, String>> ips = new java.util.HashSet<>();
           ips.add(ip);
           results.put(op, ips);
         }

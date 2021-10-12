@@ -37,6 +37,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+
+import kensu.ingestion.KensuIngester;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import zipkin2.Call;
@@ -170,6 +172,7 @@ public class ZipkinQueryApiV2 {
         .build();
 
     List<List<Span>> traces = storage.spanStore().getTraces(queryRequest).execute();
+    KensuIngester.ingestTraces(traces);
     return jsonResponse(writeTraces(SpanBytesEncoder.JSON_V2, traces));
   }
 
